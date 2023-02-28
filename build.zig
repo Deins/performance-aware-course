@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const exe_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/haversine.zig" },
+        .root_source_file = .{ .path = "src/haversine_tests.zig" },
         .target = target,
         .optimize = optimize,
     });

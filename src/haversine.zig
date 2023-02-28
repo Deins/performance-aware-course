@@ -1,6 +1,12 @@
 const std = @import("std");
 const fmtDuration = std.fmt.fmtDuration;
 const print = std.debug.print;
+const math = std.math;
+//usingnamespace @import("haversine_tests.zig");
+
+comptime {
+    @setFloatMode(.Optimized);
+}
 
 // All tests / benchmarks done on:
 //      CPU: Intel(R) Core(TM) i7-6700 CPU @ 3.40GHz
@@ -16,7 +22,7 @@ const print = std.debug.print;
 /// switch between f32 vs f64 to see performance impact
 ///     processing time is slightly faster, but with parsing taking most of it total time differs little
 /// you can try f16, f80 or f128 as well, however at time of writing zig standard library didn't support most of the math functions needed
-const Float = f32;
+const Float = f64;
 
 /// set to 0 to disable buffering and see impact when generating test-data
 /// on my PC with HDD, buffering improves write performance ~ 40X
@@ -41,11 +47,12 @@ const gen_write_buffer_size = std.mem.page_size * 16;
 const json_ignore_unknown_fields = true;
 
 /// simple toggle to print each test iterations result
+/// somehow disabling it creates suspiciously low processing times (most likely compiler inlines and moves stuff around too much)
 const print_each_test_iteration = true;
 
-/// enter radius used for harvesine
+/// enter radius used for haversine
 // TODO: might be that constant gets optimized slightly more, it might be more fair to read it as argument
-const earth_radius = 6371.0;
+const earth_radius = 6371;
 
 /// Generate test file with pairs of coordinates
 pub fn gen(absolute_path: []const u8, pair_count: usize) !void {
@@ -61,36 +68,37 @@ pub fn gen(absolute_path: []const u8, pair_count: usize) !void {
     try writer.writeAll("{\"pairs\":[\n");
 
     const seed = 12345;
-    var rand = std.rand.DefaultPrng.init(seed);
+    var rand_gen = std.rand.DefaultPrng.init(seed);
+    var rand = rand_gen.random();
     var i: usize = 1;
     if (pair_count > 0) {
-        const format: []const u8 = "{{\"x0\":{d:.5},\"y0\":{d:.5},\"x1\":{d:.5},\"y1\":{d:.5}}}";
+        // fixed precision
+        //const format: []const u8 = "{{\"x0\":{d:.5},\"y0\":{d:.5},\"x1\":{d:.5},\"y1\":{d:.5}}}";
+        // full precision
+        const format: []const u8 = "{{\"x0\":{},\"y0\":{},\"x1\":{},\"y1\":{}}}";
         while (i < pair_count) : (i += 1) {
             try writer.print(format ++ ",\n", .{
-                rand.random().float(Float) * 360 - 180,
-                rand.random().float(Float) * 360 - 180,
-                rand.random().float(Float) * 360 - 180,
-                rand.random().float(Float) * 360 - 180,
+                rand.float(Float) * 360 - 180,
+                rand.float(Float) * 360 - 180,
+                rand.float(Float) * 360 - 180,
+                rand.float(Float) * 360 - 180,
             });
         }
         // tail row without ',' at end
         try writer.print(format ++ "\n", .{
-            rand.random().float(Float) * 360 - 180,
-            rand.random().float(Float) * 360 - 180,
-            rand.random().float(Float) * 360 - 180,
-            rand.random().float(Float) * 360 - 180,
+            rand.float(Float) * 360 - 180,
+            rand.float(Float) * 360 - 180,
+            rand.float(Float) * 360 - 180,
+            rand.float(Float) * 360 - 180,
         });
     }
-
     try writer.writeAll("]}");
 
+    // IMPORTANT: can't be skipped: file.close doesn't know about buffering - must be flushed manually
+    // unfortunately, defer can't be used because defer can't return errors
     try buffered_writer.flush();
 
     print("gen done in {}\n", .{fmtDuration(timer.read())});
-}
-
-pub inline fn radians(degrees: Float) Float {
-    return degrees * (std.math.pi / 180.0);
 }
 
 inline fn sqr(x: Float) Float {
@@ -98,28 +106,32 @@ inline fn sqr(x: Float) Float {
 }
 
 pub inline fn haversineDistance(x0_deg: Float, y0_deg: Float, x1_deg: Float, y1_deg: Float, radius: Float) Float {
-    const dY = radians(y1_deg - y0_deg);
-    const dX = radians(x1_deg - x0_deg);
-    const y0 = radians(y0_deg);
-    const y1 = radians(y1_deg);
+    const dY = math.degreesToRadians(Float, y1_deg - y0_deg);
+    const dX = math.degreesToRadians(Float, x1_deg - x0_deg);
+    const y0 = math.degreesToRadians(Float, y0_deg);
+    const y1 = math.degreesToRadians(Float, y1_deg);
 
-    var root = (sqr(std.math.sin(dY / 2.0))) + std.math.cos(y0) * std.math.cos(y1) * sqr(std.math.sin(dX / 2));
-    return 2.0 * radius * std.math.asin(std.math.sqrt(root));
+    var root = (sqr(math.sin(dY / 2.0))) + math.cos(y0) * math.cos(y1) * sqr(math.sin(dX / 2));
+    return 2.0 * radius * math.asin(math.sqrt(root));
 }
 
 pub fn processFile(absolute_path: []const u8) !Result {
     var timer = try std.time.Timer.start();
+    const alloc = heap_alloc; 
 
     const file = try std.fs.openFileAbsolute(absolute_path, .{});
     defer file.close();
-    var input_data = try file.readToEndAlloc(heap_alloc, ~@intCast(usize, 0));
-    defer heap_alloc.free(input_data);
+
+    const input_data = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
+    defer alloc.free(input_data);
+
+    const read_time = timer.lap();
 
     var stream = std.json.TokenStream.init(input_data);
     const Template = struct {
         pairs: []Pair,
     };
-    const options = .{ .allocator = heap_alloc, .ignore_unknown_fields = json_ignore_unknown_fields };
+    const options = .{ .allocator = alloc, .ignore_unknown_fields = json_ignore_unknown_fields };
     const result = try std.json.parse(Template, &stream, options);
     defer std.json.parseFree(Template, result, options);
 
@@ -130,9 +142,9 @@ pub fn processFile(absolute_path: []const u8) !Result {
         sum += haversineDistance(p.x0, p.y0, p.x1, p.y1, earth_radius);
     }
 
-    const process_time = timer.read();
+    const math_time = timer.read();
 
-    return .{ .count = result.pairs.len, .sum = sum, .parse_time = parse_time, .process_time = process_time };
+    return .{ .count = result.pairs.len, .sum = sum, .parse_time = parse_time, .math_time = math_time, .read_time = read_time };
 }
 
 pub fn main() !void {
@@ -178,30 +190,35 @@ pub fn main() !void {
                 res.total_time = timer.read();
 
                 if (print_each_test_iteration) {
-                    print("-----------------------------------------\n", .{});
+                    print("-" ** 80 ++ "\n", .{});
                     print("{}#\n", .{i});
-                    print("\t" ++ "avg harvestine: {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
-                    print("\t" ++ "read & parse time: {}\n", .{fmtDuration(res.parse_time)});
-                    print("\t" ++ "process time: {}\n", .{fmtDuration(res.process_time)});
-                    print("\t" ++ "total time: {}\n", .{fmtDuration(res.total_time)});
+                    print("\t" ++ "avg harvestine:          {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
+                    print("\t" ++ "read time:               {}\n", .{fmtDuration(res.read_time)});
+                    print("\t" ++ "parse time:              {}\n", .{fmtDuration(res.parse_time)});
+                    print("\t" ++ "math time:               {}\n", .{fmtDuration(res.math_time)});
+                    print("\t" ++ "total time:              {}\n", .{fmtDuration(res.total_time)});
+                    print("\t" ++ "throughput:              {} haversines/second\n", .{res.count * std.time.ns_per_s / res.total_time});
                 }
 
-                total_res.parse_time = std.math.min(total_res.parse_time, res.parse_time);
-                total_res.process_time = std.math.min(total_res.process_time, res.process_time);
-                total_res.total_time = std.math.min(total_res.total_time, res.total_time);
-                
+                total_res.read_time = math.min(total_res.read_time, res.read_time);
+                total_res.parse_time = math.min(total_res.parse_time, res.parse_time);
+                total_res.math_time = math.min(total_res.math_time, res.math_time);
+                total_res.total_time = math.min(total_res.total_time, res.total_time);
+
                 total_res.count = res.count;
                 total_res.sum = res.sum;
             }
             //if (i > 1 or !print_each_test_iteration)
             {
                 const res = total_res;
-                print("=======================================\nBEST SUB-RESULTS:\n", .{});
-                print("(test-iterations: {}, input size: {}, float: {})\n", .{total_iterations, res.count, Float});
-                print("\t" ++ "read & parse time: {}\n", .{fmtDuration(res.parse_time)});
-                print("\t" ++ "process time: {}\n", .{fmtDuration(res.process_time)});
-                print("\t" ++ "total time: {}\n", .{fmtDuration(res.total_time)});
-                print("\t" ++ "haversine throughput: {} haversines/second\n", .{res.count * std.time.ns_per_s / res.total_time});
+                print("=" ** 80 ++ "\nBEST SUB-RESULTS:\n", .{});
+                print("(test-iterations: {}, input size: {}, float: {})\n", .{ total_iterations, res.count, Float });
+                print("\t" ++ "avg harvestine:          {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
+                print("\t" ++ "read time:               {}\n", .{fmtDuration(res.read_time)});
+                print("\t" ++ "parse time:              {}\n", .{fmtDuration(res.parse_time)});
+                print("\t" ++ "math time:               {}\n", .{fmtDuration(res.math_time)});
+                print("\t" ++ "total time:              {}\n", .{fmtDuration(res.total_time)});
+                print("\t" ++ "throughput:              {} haversines/second\n", .{res.count * std.time.ns_per_s / res.total_time});
             }
         } else if (std.ascii.eqlIgnoreCase(args[ai], "-i")) {
             // SET ITERATIONS
@@ -235,62 +252,10 @@ const Pair = struct { x0: Float, y0: Float, x1: Float, y1: Float };
 
 const Result = struct {
     count: usize = 0,
-    sum: Float = std.math.nan(Float),
+    sum: Float = math.nan(Float),
 
-    parse_time: u64 = std.math.maxInt(u64),
-    process_time: u64 = std.math.maxInt(u64),
-    total_time: u64 = std.math.maxInt(u64),
+    read_time: u64 = math.maxInt(u64),
+    parse_time: u64 = math.maxInt(u64),
+    math_time: u64 = math.maxInt(u64),
+    total_time: u64 = math.maxInt(u64),
 };
-
-// TESTS
-const json_unordered_with_junk =
-    \\{
-    \\  "z_anything_but_pairs": [ {
-    \\			"x0": 0,
-    \\			"y0": 0,
-    \\			"x1": 0,
-    \\			"y1": 0
-    \\		}
-    \\  ],
-    \\	"pairs": [{
-    \\          "foo" : "bar",
-    \\			"x0": 115.124,
-    \\			"y0": -87.123,
-    \\			"x1": -123,
-    \\			"y1": 15.40
-    \\		},
-    \\		{
-    \\			"y1": 95.40,
-    \\			"y0": -7.323,
-    \\          "planet" : "earth",
-    \\			"x0": 315.124,
-    \\			"x1": -123
-    \\		}
-    \\	],
-    \\  "some random other data" : { "x0": 5}
-    \\}
-;
-
-test "test_default_json_parse" {
-    var stream = std.json.TokenStream.init(json_unordered_with_junk);
-    const Template = struct {
-        pairs: []Pair,
-    };
-    const options = .{
-        .allocator = std.testing.allocator,
-        .ignore_unknown_fields = true,
-    };
-    const result = try std.json.parse(Template, &stream, options);
-    defer std.json.parseFree(Template, result, options);
-
-    try std.testing.expectEqual(result.pairs.len, 2);
-    try std.testing.expectEqual(result.pairs[0].x0, 115.124);
-    try std.testing.expectEqual(result.pairs[0].y0, -87.123);
-    try std.testing.expectEqual(result.pairs[0].x1, -123);
-    try std.testing.expectEqual(result.pairs[0].y1, 15.4);
-
-    try std.testing.expectEqual(result.pairs[1].x0, 315.124);
-    try std.testing.expectEqual(result.pairs[1].y0, -7.323);
-    try std.testing.expectEqual(result.pairs[1].x1, -123);
-    try std.testing.expectEqual(result.pairs[1].y1, 95.4);
-}
