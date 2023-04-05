@@ -9,18 +9,19 @@ comptime {
 }
 
 // All tests / benchmarks done on:
-//      CPU: Intel(R) Core(TM) i7-6700 CPU @ 3.40GHz
+//
+//      CPU: (Skylake) Intel i7-6700 CPU @ 3.40GHz
 //              turbo boost up to 4Ghz
 //              4 cores / 8 threads
 //              Cache L1: 	64K (per core)
 //              Cache L2: 	256K (per core)
 //              Cache L3: 	8MB (shared)
-//      RAM: 32GB (Crucial CT16G4DFRA266  2 x 16 GB DDR4 2666 MHz)
+//      RAM: 32GB dual-channel (Crucial CT16G4DFRA266  2 x 16 GB DDR4 2666 MHz)
 //      OS:  Windows 10 pro x64 (installed on SSD)
-//      With program and test data placed on HDD (not sure how much it matters test (non generator part) as input file should be cached by OS)
+//      With program and test data placed on HDD (should not matter that much (for non generator part) as input file should be cached by OS)
 
 /// switch between f32 vs f64 to see performance impact
-///     processing time is slightly faster, but with parsing taking most of it total time differs little
+///     processing time is faster, but with parsing taking most of total time
 /// you can try f16, f80 or f128 as well, however at time of writing zig standard library didn't support most of the math functions needed
 const Float = f64;
 
@@ -43,18 +44,17 @@ const Float = f64;
 const gen_write_buffer_size = std.mem.page_size * 16;
 
 /// When set to true allows parsing json files that have additional data within them. Otherwise parsing will report error.
-/// Doesn't seem to have much of an performance impact (when tested on data without extra fields)
 const json_ignore_unknown_fields = true;
 
-/// simple toggle to print each test iterations result
-/// somehow disabling it creates suspiciously low processing times (most likely compiler inlines and moves stuff around too much)
+/// simple toggle to print each test iteration result
+/// somehow disabling it creates suspiciously low math timings (most likely compiler inlines and moves stuff around too much)
 const print_each_test_iteration = true;
 
 /// enter radius used for haversine
 // TODO: might be that constant gets optimized slightly more, it might be more fair to read it as argument
 const earth_radius = 6371;
 
-/// Generate test file with pairs of coordinates
+/// Generate random test file with pairs of coordinates
 pub fn gen(absolute_path: []const u8, pair_count: usize) !void {
     var timer = try std.time.Timer.start();
 
@@ -98,7 +98,7 @@ pub fn gen(absolute_path: []const u8, pair_count: usize) !void {
     // unfortunately, defer can't be used because defer can't return errors
     try buffered_writer.flush();
 
-    print("gen done in {}\n", .{fmtDuration(timer.read())});
+    print("gen done and written in {}\n", .{fmtDuration(timer.read())});
 }
 
 inline fn sqr(x: Float) Float {
@@ -117,16 +117,17 @@ pub inline fn haversineDistance(x0_deg: Float, y0_deg: Float, x1_deg: Float, y1_
 
 pub fn processFile(absolute_path: []const u8) !Result {
     var timer = try std.time.Timer.start();
-    const alloc = heap_alloc; 
+    const alloc = heap_alloc;
 
+    // read
     const file = try std.fs.openFileAbsolute(absolute_path, .{});
     defer file.close();
 
-    const input_data = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
+    const input_data = try file.readToEndAlloc(alloc, math.maxInt(usize));
     defer alloc.free(input_data);
-
     const read_time = timer.lap();
 
+    // parse
     var stream = std.json.TokenStream.init(input_data);
     const Template = struct {
         pairs: []Pair,
@@ -134,9 +135,9 @@ pub fn processFile(absolute_path: []const u8) !Result {
     const options = .{ .allocator = alloc, .ignore_unknown_fields = json_ignore_unknown_fields };
     const result = try std.json.parse(Template, &stream, options);
     defer std.json.parseFree(Template, result, options);
-
     const parse_time = timer.lap();
 
+    // math
     var sum: Float = 0;
     for (result.pairs) |p| {
         sum += haversineDistance(p.x0, p.y0, p.x1, p.y1, earth_radius);
@@ -166,7 +167,10 @@ pub fn main() !void {
                     print("Argument '-n' expects integer after it, parse error: {}\n", .{err});
                     return;
                 };
-                try gen(test_path, n);
+                gen(test_path, n) catch |err| {
+                    print("error {} generating file '{s}'\n", .{err, test_path});
+                    return err;
+                };
             } else {
                 print("Argument '-n' expects integer after it\n", .{});
                 return;
@@ -176,7 +180,7 @@ pub fn main() !void {
             ai += 1;
             if (ai < args.len) {
                 heap_alloc.free(test_path);
-                test_path = try std.fs.path.join(heap_alloc, &.{ exe_path, args[ai] });
+                test_path = if (std.fs.path.isAbsolute(args[ai])) try heap_alloc.dupe(u8, args[ai]) else try std.fs.path.join(heap_alloc, &.{ exe_path, args[ai] });
             } else {
                 print("Argument '-f' expects file name after it\n", .{});
                 return;
@@ -192,7 +196,7 @@ pub fn main() !void {
                 if (print_each_test_iteration) {
                     print("-" ** 80 ++ "\n", .{});
                     print("{}#\n", .{i});
-                    print("\t" ++ "avg harvestine:          {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
+                    print("\t" ++ "avg haversine:          {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
                     print("\t" ++ "read time:               {}\n", .{fmtDuration(res.read_time)});
                     print("\t" ++ "parse time:              {}\n", .{fmtDuration(res.parse_time)});
                     print("\t" ++ "math time:               {}\n", .{fmtDuration(res.math_time)});
@@ -213,7 +217,7 @@ pub fn main() !void {
                 const res = total_res;
                 print("=" ** 80 ++ "\nBEST SUB-RESULTS:\n", .{});
                 print("(test-iterations: {}, input size: {}, float: {})\n", .{ total_iterations, res.count, Float });
-                print("\t" ++ "avg harvestine:          {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
+                print("\t" ++ "avg haversine:          {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
                 print("\t" ++ "read time:               {}\n", .{fmtDuration(res.read_time)});
                 print("\t" ++ "parse time:              {}\n", .{fmtDuration(res.parse_time)});
                 print("\t" ++ "math time:               {}\n", .{fmtDuration(res.math_time)});
