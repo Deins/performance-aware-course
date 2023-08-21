@@ -128,14 +128,19 @@ pub fn processFile(absolute_path: []const u8) !Result {
     const read_time = timer.lap();
 
     // parse
-    var stream = std.json.TokenStream.init(input_data);
     const Template = struct {
         pairs: []Pair,
     };
-    const options = .{ .allocator = alloc, .ignore_unknown_fields = json_ignore_unknown_fields };
-    const result = try std.json.parse(Template, &stream, options);
-    defer std.json.parseFree(Template, result, options);
+    const parsed = try std.json.parseFromSlice(Template, alloc, input_data, .{
+        .duplicate_field_behavior = .@"error",
+        .ignore_unknown_fields = json_ignore_unknown_fields,
+        .max_value_len = null,
+        .allocate = .alloc_if_needed,
+    });
+    defer parsed.deinit();
     const parse_time = timer.lap();
+
+    const result = &parsed.value;
 
     // math
     var sum: Float = 0;
@@ -168,7 +173,7 @@ pub fn main() !void {
                     return;
                 };
                 gen(test_path, n) catch |err| {
-                    print("error {} generating file '{s}'\n", .{err, test_path});
+                    print("error {} generating file '{s}'\n", .{ err, test_path });
                     return err;
                 };
             } else {
@@ -196,7 +201,7 @@ pub fn main() !void {
                 if (print_each_test_iteration) {
                     print("-" ** 80 ++ "\n", .{});
                     print("{}#\n", .{i});
-                    print("\t" ++ "avg haversine:          {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
+                    print("\t" ++ "avg haversine:          {d:.5}\n", .{res.sum / @as(f64, @floatFromInt(res.count))});
                     print("\t" ++ "read time:               {}\n", .{fmtDuration(res.read_time)});
                     print("\t" ++ "parse time:              {}\n", .{fmtDuration(res.parse_time)});
                     print("\t" ++ "math time:               {}\n", .{fmtDuration(res.math_time)});
@@ -204,10 +209,10 @@ pub fn main() !void {
                     print("\t" ++ "throughput:              {} haversines/second\n", .{res.count * std.time.ns_per_s / res.total_time});
                 }
 
-                total_res.read_time = math.min(total_res.read_time, res.read_time);
-                total_res.parse_time = math.min(total_res.parse_time, res.parse_time);
-                total_res.math_time = math.min(total_res.math_time, res.math_time);
-                total_res.total_time = math.min(total_res.total_time, res.total_time);
+                total_res.read_time = @min(total_res.read_time, res.read_time);
+                total_res.parse_time = @min(total_res.parse_time, res.parse_time);
+                total_res.math_time = @min(total_res.math_time, res.math_time);
+                total_res.total_time = @min(total_res.total_time, res.total_time);
 
                 total_res.count = res.count;
                 total_res.sum = res.sum;
@@ -217,7 +222,7 @@ pub fn main() !void {
                 const res = total_res;
                 print("=" ** 80 ++ "\nBEST SUB-RESULTS:\n", .{});
                 print("(test-iterations: {}, input size: {}, float: {})\n", .{ total_iterations, res.count, Float });
-                print("\t" ++ "avg haversine:          {d:.5}\n", .{res.sum / @intToFloat(Float, res.count)});
+                print("\t" ++ "avg haversine:          {d:.5}\n", .{res.sum / @as(f64, @floatFromInt(res.count))});
                 print("\t" ++ "read time:               {}\n", .{fmtDuration(res.read_time)});
                 print("\t" ++ "parse time:              {}\n", .{fmtDuration(res.parse_time)});
                 print("\t" ++ "math time:               {}\n", .{fmtDuration(res.math_time)});

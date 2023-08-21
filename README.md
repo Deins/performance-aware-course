@@ -3,7 +3,7 @@
 My solutions and sandbox for course: https://www.computerenhance.com/
 
 Solutions mostly written in zig or C/C++ (using zig build system).
-`zig version 0.11.0-dev.1593+d24ebf1d1` is being used, different versions might or might not work.
+`zig version 0.11.0` unless specified otherwise.
 
 ## Haversine distance
 
@@ -54,7 +54,7 @@ Generates 10M random coordinate pairs and prints them out in json format.
 Only optimization more or less is just to inline haversine function. Let the compiler optimize.
 
 **1.4 million haversines/second**
-
+`zig version 0.11.0-dev.1593+d24ebf1d1` before [this](https://ziglang.org/download/0.11.0/release-notes.html#JSON) change
 ```
 BEST SUB-RESULTS:
 (test-iterations: 20, input size: 10000000, float: f64)
@@ -65,7 +65,15 @@ BEST SUB-RESULTS:
         total time:              7.046s
         throughput:              1419120 haversines/second
 ```
+`zig version 0.11.0`
+```
+BEST SUB-RESULTS:
+(test-iterations: 20, input size: 10000000, float: f64)
+        avg haversine:          10006.62310
+        read time:               1.281s
+        parse time:              4.794s
+        math time:               650.867ms
+        total time:              6.834s
+        throughput:              1463088 haversines/second
+```
 
-#### streaming implementations
-
-* stream parse and process at same time
